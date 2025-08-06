@@ -1,0 +1,132 @@
+---
+- name: Deploy Serpent Surge Game Server
+  hosts: all
+  become: true
+  vars_files:
+    - terraform-outputs.json
+
+  vars:
+    docker_compose_path: /home/ubuntu/docker-compose.yml
+    scripts_path: /opt/scripts
+    ssl_path: /etc/ssl/zoltan
+    ssl_cert: "{{ ssl_path }}/zoltan.crt"
+    ssl_key: "{{ ssl_path }}/zoltan.key"
+    nginx_conf_dest: /etc/nginx/sites-available/zoltan
+    nginx_conf_link: /etc/nginx/sites-enabled/zoltan
+    nginx_conf_src: nginx.conf
+    db_user: "{{ db_user | default('admin') }}"
+    db_password: "{{ db_password | default('adminpassword') }}"
+    db_name: "{{ db_name | default('serpent_surge_db') }}"
+    rds_host: "{{ rds_endpoint.value.split(':')[0] }}"
+    s3_bucket: "{{ s3_bucket_name.value }}"
+    ssl_domain: zoltan.example.com
+
+  tasks:
+    - name: Install required apt packages
+      apt:
+        name:
+          - docker.io
+          - unzip
+          - nginx
+          - python3-pip
+        state: present
+        update_cache: true
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Create Docker Compose plugin directory
+      file:
+        path: /usr/local/lib/docker/cli-plugins
+        state: directory
+        mode: '0755'
+
+    - name: Install Docker Compose v2
+      get_url:
+        url: https://github.com/docker/compose/releases/download/v2.24.2/docker-compose-linux-x86_64
+        dest: /usr/local/lib/docker/cli-plugins/docker-compose
+        mode: '0755'
+
+    - name: Copy docker-compose template
+      template:
+        src: docker-compose.yml.j2
+        dest: /home/ubuntu/docker-compose.yml
+        mode: '0644'
+
+    - name: Copy nginx config
+      copy:
+        src: nginx.conf
+        dest: /etc/nginx/sites-enabled/zoltan
+        mode: '0644'
+
+    - name: Create SSL directory
+      file:
+        path: /etc/ssl/zoltan
+        state: directory
+        mode: '0755'
+
+    - name: Generate self-signed SSL cert
+      command: >
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /etc/ssl/zoltan/zoltan.key
+        -out /etc/ssl/zoltan/zoltan.crt
+        -subj "/CN=zoltan.example.com"
+      args:
+        creates: /etc/ssl/zoltan/zoltan.crt
+
+    - name: Reload Nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Create scripts directory
+      file:
+        path: /opt/scripts
+        state: directory
+        mode: '0755'
+
+    - name: Copy DB init script
+      copy:
+        src: ../bash/01-create-database.sh
+        dest: /opt/scripts/01-create-database.sh
+        mode: '0755'
+
+    - name: Run DB init script
+      command: /opt/scripts/01-create-database.sh
+
+    - name: Template backup script
+      template:
+        src: ../bash/backup-script.sh.j2
+        dest: /opt/scripts/02-backup-score.sh
+        mode: '0755'
+
+    - name: Copy backup service file
+      copy:
+        src: ../bash/backup-score.service
+        dest: /etc/systemd/system/backup-score.service
+        mode: '0644'
+
+    - name: Copy backup timer file
+      copy:
+        src: ../bash/backup-score.timer
+        dest: /etc/systemd/system/backup-score.timer
+        mode: '0644'
+
+    - name: Enable and start backup timer
+      systemd:
+        name: backup-score.timer
+        enabled: yes
+        state: started
+
+    - name: Copy backend folder
+      copy:
+        src: ../docker/backend
+        dest: /home/ubuntu/backend
+        mode: '0755'
+
+    - name: Start containers
+      command: docker compose -f /home/ubuntu/docker-compose.yml up -d --build --remove-orphans
+
