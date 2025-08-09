@@ -1,0 +1,30 @@
+# Terraform junk
+terraform/.terraform/providers/registry.terraform.io/hashicorp/*
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/*.tfvars
+terraform/*_override.tf
+terraform/.terraform.lock.hcl
+
+# AWS keypair
+terraform/serpent-surge-key.pem
+
+# Ansible artifacts
+ansible/*.retry
+ansible/__pycache__/
+
+# System files
+.DS_Store
+*.swp
+*.swo
+*.bak
+
+# Node modules (just in case)
+**/node_modules/
+
+# Docker build context cache
+**/.dockerignore
+
+# Backup files
+/opt/backups/*
+

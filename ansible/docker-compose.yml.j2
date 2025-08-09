@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    container_name: backend
+    ports:
+      - "3000:3000"
+    environment:
+      MYSQL_HOST: "{{ rds_endpoint.value.split(':')[0] }}"
+      MYSQL_PORT: "{{ rds_endpoint.value.split(':')[1] }}"
+      MYSQL_USER: "admin"
+      MYSQL_PASSWORD: "adminpassword"
+      MYSQL_DATABASE: "serpent_surge_db"
+    restart: unless-stopped
+
+  frontend:
+    image: nginx:alpine
+    container_name: frontend
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      -  /home/ubuntu/nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - backend

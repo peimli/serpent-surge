@@ -1,0 +1,141 @@
+- name: Deploy Serpent Surge App with Backup Timer
+  hosts: web
+  become: true
+
+  vars:
+    db_user: "{{ db_user | default('admin') }}"
+    db_password: "{{ db_password | default('adminpassword') }}"
+    db_name: "{{ db_name | default('serpent_surge_db') }}"
+    rds_endpoint: "{{ rds_endpoint | default('localhost') }}"
+    s3_bucket_name: "{{ s3_bucket_name | default('serpent-surge-backups') }}"
+
+  tasks:
+    - name: Remove conflicting Docker packages
+      apt:
+        name:
+          - docker
+          - docker-engine
+          - docker.io
+          - containerd
+          - runc
+        state: absent
+        purge: yes
+        force: yes
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker APT repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu jammy stable
+        state: present
+        filename: docker
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Docker engine and dependencies
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - unzip
+          - mysql-client
+          - awscli
+        state: present
+
+    - name: Add user to docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    - name: Download legacy Docker Compose binary
+      get_url:
+        url: https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    - name: Ensure /opt/scripts exists
+      file:
+        path: /opt/scripts
+        state: directory
+        mode: '0755'
+
+    - name: Copy docker-compose.yml
+      template:
+        src: docker-compose.yml.j2
+        dest: /home/ubuntu/docker-compose.yml
+        mode: '0644'
+
+    - name: Copy backend code
+      copy:
+        src: ../docker/backend/
+        dest: /home/ubuntu/backend/
+        mode: '0755'
+
+    - name: Copy frontend code
+      copy:
+        src: ../docker/frontend/
+        dest: /home/ubuntu/frontend/
+        mode: '0755'
+
+    - name: Copy nginx config
+      copy:
+        src: nginx.conf
+        dest: /home/ubuntu/nginx.conf
+        mode: '0644'
+
+    - name: Stop and remove old containers
+      shell: |
+        docker stop $(docker ps -aq) || true
+        docker rm $(docker ps -aq) || true
+        docker volume prune -f
+
+    - name: Start containers
+      shell: docker-compose -f /home/ubuntu/docker-compose.yml up -d --build --remove-orphans
+      args:
+        chdir: /home/ubuntu/
+
+    # DB Initialization
+    - name: Copy DB init script
+      copy:
+        src: ../bash/01-create-database.sh
+        dest: /opt/scripts/01-create-database.sh
+        mode: '0755'
+
+    - name: Run DB init script
+      command: /opt/scripts/01-create-database.sh
+
+    # Backup automation
+    - name: Template backup script
+      template:
+        src: ../bash/backup-script.sh.j2
+        dest: /opt/scripts/02-backup-score.sh
+        mode: '0755'
+
+    - name: Copy systemd service
+      copy:
+        src: ../bash/backup-score.service
+        dest: /etc/systemd/system/backup-score.service
+        mode: '0644'
+
+    - name: Copy systemd timer
+      copy:
+        src: ../bash/backup-score.timer
+        dest: /etc/systemd/system/backup-score.timer
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start backup timer
+      systemd:
+        name: backup-score.timer
+        enabled: yes
+        state: started

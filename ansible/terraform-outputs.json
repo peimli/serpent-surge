@@ -1,0 +1,37 @@
+{
+  "db_name": {
+    "sensitive": false,
+    "type": "string",
+    "value": "serpent_surge_db"
+  },
+  "db_password": {
+    "sensitive": true,
+    "type": "string",
+    "value": "adminpassword"
+  },
+  "db_user": {
+    "sensitive": false,
+    "type": "string",
+    "value": "admin"
+  },
+  "ec2_public_ip": {
+    "sensitive": false,
+    "type": "string",
+    "value": "34.227.106.66"
+  },
+  "rds_endpoint": {
+    "sensitive": false,
+    "type": "string",
+    "value": "serpent-db.c87my88m4fne.us-east-1.rds.amazonaws.com:3306"
+  },
+  "s3_bucket_name": {
+    "sensitive": false,
+    "type": "string",
+    "value": "serpent-surge-backups-42fde051"
+  },
+  "ssh_private_key": {
+    "sensitive": true,
+    "type": "string",
+    "value": "-----BEGIN RSA PRIVATE KEY-----\n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\n-----END RSA PRIVATE KEY-----\n"
+  }
+}

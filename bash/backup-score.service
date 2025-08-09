@@ -1,0 +1,9 @@
+[Unit]
+Description=Backup the 'score' table to S3
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/02-backup-score.sh
+StandardOutput=append:/var/log/score-backup.log
+StandardError=append:/var/log/score-backup.log
