@@ -4,6 +4,6 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/home/ubuntu/02-backup-score.sh
+ExecStart=/opt/scripts/backup-script.sh.j2
 StandardOutput=append:/var/log/score-backup.log
 StandardError=append:/var/log/score-backup.log
