@@ -42,7 +42,7 @@ final-project/
 How to Deploy
 1. Clone the Repository
 
-git clone https://github.com/peimli/linux-final-project.git
+git clone git@github.com:peimli/serpent-surge.git
 cd linux-final-project
 
 2. Set Up AWS Credentials
