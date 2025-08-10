@@ -1,0 +1,33 @@
+#!/bin/bash
+set -e
+{% set _ep = rds_endpoint.value if rds_endpoint is mapping else rds_endpoint %}
+{% set _user = db_user.value if db_user is mapping else db_user %}
+{% set _pass = db_password.value if db_password is mapping else db_password %}
+{% set _name = db_name.value if db_name is mapping else db_name %}
+{% set _table = table_name if table_name is defined else 'scores' %}
+
+{% set _parts = _ep.split(':') %}
+
+DB_HOST="{{ _parts[0] }}"
+DB_PORT="{{ _parts[1] if _parts|length > 1 else '3306' }}"
+DB_USER="{{ _user }}"
+DB_PASSWORD="{{ _pass }}"
+DB_NAME="{{ _name }}"
+TABLE_NAME="{{ _table }}"
+
+echo "[INFO] Creating database '$DB_NAME' and table '$TABLE_NAME' on $DB_HOST:$DB_PORT..."
+
+# Adatbázis létrehozása, ha még nincs
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" \
+    -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;"
+
+# Tábla létrehozása, ha még nincs
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" \
+    -e "CREATE TABLE IF NOT EXISTS \`$TABLE_NAME\` (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        player_name VARCHAR(100),
+        points INT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );"
+
+echo "[OK] Database and table ensured."

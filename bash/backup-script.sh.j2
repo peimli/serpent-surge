@@ -1,27 +1,102 @@
 #!/bin/bash
 set -euo pipefail
-set -e
-echo "[$(date)] 🔄 Starting DB backup..."
 
-MYSQL_HOST="{{ rds_endpoint.value | regex_replace(':.*$', '') }}"
-MYSQL_USER="{{ db_user.value }}"
-MYSQL_PASSWORD="{{ db_password.value }}"
-MYSQL_DATABASE="{{ db_name.value }}"
-S3_BUCKET="{{ s3_bucket_name.value }}"
 
-DUMP_DIR="/opt/backups"
-DUMP_FILE="$DUMP_DIR/score-$(date +%Y%m%d-%H%M%S).sql"
-mkdir -p "$DUMP_DIR"
+BACKUP_BASE="/var/backups/score"
+DUMPS_DIR="$BACKUP_BASE/dumps"
+ARCHIVES_DIR="$BACKUP_BASE/archives"
 
-echo "[$(date)] 📤 Dumping '$MYSQL_DATABASE' table from $MYSQL_HOST..."
-mysqldump --ssl-mode=REQUIRED -h "$MYSQL_HOST" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE" > "$DUMP_FILE"
-echo "[$(date)] ☁️ Uploading $DUMP_FILE to S3 bucket $S3_BUCKET..."
-aws s3 cp "$DUMP_FILE" "s3://$S3_BUCKET/"
+DB_USER="{{ db_user.value }}"
+DB_PASS="{{ db_password.value }}"
+DB_NAME="{{ db_name.value }}"
+RDS_ENDPOINT="{{ rds_endpoint.value }}"  
 
-echo "[$(date)] 🧹 Rotating old backups (keeping 3 latest)..."
-aws s3 ls "s3://$S3_BUCKET/" | awk '{print $4}' | sort | head -n -3 | while read file; do
-  echo "[$(date)] ❌ Deleting $file..."
-  aws s3 rm "s3://$S3_BUCKET/$file"
-done
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
 
-echo "[$(date)] ✅ Backup complete: $DUMP_FILE"
+usage() {
+  cat <<EOF
+Usage: $0 [--run] [--list] [--help]
+  --run    Run backup now (default)
+  --list   List existing dumps and archives (Date | Size)
+  --help   Show this help
+EOF
+}
+
+parse_endpoint() {
+  local ep="$1"
+  DB_HOST="$ep"
+  DB_PORT="3306"
+  if [[ "$ep" == *:* ]]; then
+    DB_HOST="${ep%%:*}"
+    DB_PORT="${ep##*:}"
+  fi
+}
+
+list_backups() {
+  printf "%-20s %-10s %s\n" "TYPE" "DATE" "SIZE"
+  if compgen -G "$DUMPS_DIR/*.sql.gz" > /dev/null; then
+    while IFS= read -r f; do
+      printf "%-20s %-10s %s KB\n" "DUMP" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
+    done < <(ls -1t "$DUMPS_DIR"/*.sql.gz 2>/dev/null)
+  fi
+  if compgen -G "$ARCHIVES_DIR/*.tar.gz" > /dev/null; then
+    while IFS= read -r f; do
+      printf "%-20s %-10s %s KB\n" "ARCHIVE" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
+    done < <(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null)
+  fi
+}
+
+run_backup() {
+  mkdir -p "$DUMPS_DIR" "$ARCHIVES_DIR"
+
+  parse_endpoint "$RDS_ENDPOINT"
+  local today dump_file
+  today="$(date +%F)"
+  dump_file="$DUMPS_DIR/${today}.sql.gz"
+
+  log "🔄 Starting DB backup (host=$DB_HOST port=$DB_PORT db=$DB_NAME table=scores)..."
+  if ! mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" scores | gzip > "$dump_file"; then
+    log "❌ Backup failed"; exit 1
+  fi
+  log "✅ Dump saved: $dump_file"
+
+  # Every 3rd day → archive the entire dumps directory snapshot
+  local daynum archive_file
+  daynum="$(date +%d)"
+  if (( daynum % 3 == 0 )); then
+    archive_file="$ARCHIVES_DIR/${today}_backup.tar.gz"
+    ( cd "$DUMPS_DIR" && tar -czf "$archive_file" . )
+    log "📦 Archive created: $archive_file"
+
+    # Keep max 3 archives (newest 3)
+    local cnt
+    cnt=$(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null | wc -l || true)
+    if (( cnt > 3 )); then
+      # remove older than 3
+      ls -1t "$ARCHIVES_DIR"/*.tar.gz | tail -n +4 | while read -r old; do
+        log "🗑 Removing old archive: $old"
+        rm -f -- "$old"
+      done
+    fi
+
+    # Optional S3 upload
+    if command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1; then
+      if aws s3 cp "$archive_file" "s3://$S3_BUCKET/"; then
+        log "☁ Uploaded to S3: s3://$S3_BUCKET/$(basename "$archive_file")"
+      else
+        log "⚠ S3 upload failed; continuing locally."
+      fi
+    else
+      log "⚠ No AWS credentials; skipping S3 upload."
+    fi
+  fi
+}
+
+case "${1:---run}" in
+  --help|-h) usage ;;
+  --list|-l) list_backups ;;
+  --run|-r|"") run_backup ;;
+  *) usage; exit 1 ;;
+esac

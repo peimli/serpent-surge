@@ -101,26 +101,45 @@
       args:
         chdir: /home/ubuntu/
 
-    # DB Initialization
+    - name: Create non-login user for backups
+      user:
+        name: serpentbackup
+        system: yes
+        shell: /usr/sbin/nologin
+        create_home: no
+
     - name: Copy DB init script
-      copy:
-        src: ../bash/01-create-database.sh
+      template:
+        src: ../bash/01-create-database.sh.j2
         dest: /opt/scripts/01-create-database.sh
         mode: '0755'
 
     - name: Run DB init script
       command: /opt/scripts/01-create-database.sh
 
-    # Backup automation
+    - name: Ensure backup directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: serpentbackup
+        group: serpentbackup
+        mode: '0750'
+      loop:
+        - /var/backups/score
+        - /var/backups/score/dumps
+        - /var/backups/score/archives
+
     - name: Template backup script
       template:
         src: ../bash/backup-script.sh.j2
         dest: /opt/scripts/backup-script.sh
-        mode: '0755'
+        owner: serpentbackup
+        group: serpentbackup
+        mode: '0750'
 
-    - name: Copy systemd service
+    - name: Create systemd service for backup
       copy:
-        src: ../bash/backup-score.service
+        src: "{{ playbook_dir }}/../bash/backup-score.service"
         dest: /etc/systemd/system/backup-score.service
         mode: '0644'
 
@@ -139,3 +158,4 @@
         name: backup-score.timer
         enabled: yes
         state: started
+

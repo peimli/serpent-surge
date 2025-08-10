@@ -4,6 +4,12 @@ After=network.target
 
 [Service]
 Type=oneshot
+User=serpentbackup
+Group=serpentbackup
 ExecStart=/opt/scripts/backup-script.sh
 StandardOutput=append:/var/log/score-backup.log
 StandardError=append:/var/log/score-backup.log
+
+[Install]
+WantedBy=multi-user.target
+
