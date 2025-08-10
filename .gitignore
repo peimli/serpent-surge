@@ -28,3 +28,5 @@ ansible/__pycache__/
 # Backup files
 /opt/backups/*
 
+# Terraform outputs.json
+/ansible/terraform-outputs.json
