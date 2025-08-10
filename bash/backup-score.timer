@@ -4,6 +4,7 @@ Description=Run score backup every day
 [Timer]
 OnCalendar=daily
 Persistent=true
+Unit=backup-score.service
 
 [Install]
 WantedBy=timers.target

@@ -115,7 +115,7 @@
     - name: Template backup script
       template:
         src: ../bash/backup-script.sh.j2
-        dest: /opt/scripts/backup-script.sh.j2
+        dest: /opt/scripts/backup-script.sh
         mode: '0755'
 
     - name: Copy systemd service
