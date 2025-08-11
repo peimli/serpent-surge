@@ -4,7 +4,7 @@ set -e
 {% set _user = db_user.value if db_user is mapping else db_user %}
 {% set _pass = db_password.value if db_password is mapping else db_password %}
 {% set _name = db_name.value if db_name is mapping else db_name %}
-{% set _table = table_name if table_name is defined else 'scores' %}
+{% set _table = table_name.value if table_name is defined else 'scores' %}
 
 {% set _parts = _ep.split(':') %}
 
