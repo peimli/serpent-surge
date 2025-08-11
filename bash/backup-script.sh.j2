@@ -1,28 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 
+{% set _ep    = rds_endpoint.value if rds_endpoint is mapping else rds_endpoint %}
+{% set _user  = db_user.value       if db_user       is mapping else db_user %}
+{% set _pass  = db_password.value   if db_password   is mapping else db_password %}
+{% set _name  = db_name.value       if db_name       is mapping else db_name %}
+{% set _bucket= s3_bucket_name.value      %}
+{% set _table = table_name.value if table_name is defined else 'scores' %}
 
 BACKUP_BASE="/var/backups/score"
 DUMPS_DIR="$BACKUP_BASE/dumps"
 ARCHIVES_DIR="$BACKUP_BASE/archives"
 
-DB_USER="{{ db_user.value }}"
-DB_PASS="{{ db_password.value }}"
-DB_NAME="{{ db_name.value }}"
-RDS_ENDPOINT="{{ rds_endpoint.value }}"  
+DB_USER="{{ _user }}"
+DB_PASS="{{ _pass }}"
+DB_NAME="{{ _name }}"
+RDS_ENDPOINT="{{ _ep }}"
+TABLE_NAME="{{ _table }}"
+S3_BUCKET="{{ _bucket }}"
 
-log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-}
-
-usage() {
-  cat <<EOF
-Usage: $0 [--run] [--list] [--help]
-  --run    Run backup now (default)
-  --list   List existing dumps and archives (Date | Size)
-  --help   Show this help
-EOF
-}
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 parse_endpoint() {
   local ep="$1"
@@ -34,17 +31,27 @@ parse_endpoint() {
   fi
 }
 
+usage() {
+  cat <<EOF
+Usage: $0 [--run] [--archive-now] [--list] [--help]
+  --run           Napi dump; minden 3. napon (vagy FORCE_ARCHIVE=1 esetén) archív + S3
+  --archive-now   Azonnali dump + archív + S3 (teszteléshez)
+  --list          Mentések listázása
+  --help          Súgó
+EOF
+}
+
 list_backups() {
-  printf "%-20s %-10s %s\n" "TYPE" "DATE" "SIZE"
-  if compgen -G "$DUMPS_DIR/*.sql.gz" > /dev/null; then
-    while IFS= read -r f; do
-      printf "%-20s %-10s %s KB\n" "DUMP" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
-    done < <(ls -1t "$DUMPS_DIR"/*.sql.gz 2>/dev/null)
+  printf "%-8s %-12s %s\n" "TYPE" "DATE" "SIZE(KB)"
+  if compgen -G "$DUMPS_DIR/*.sql.gz" >/dev/null; then
+    for f in $(ls -1t "$DUMPS_DIR"/*.sql.gz 2>/dev/null); do
+      printf "%-8s %-12s %s\n" "DUMP" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
+    done
   fi
-  if compgen -G "$ARCHIVES_DIR/*.tar.gz" > /dev/null; then
-    while IFS= read -r f; do
-      printf "%-20s %-10s %s KB\n" "ARCHIVE" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
-    done < <(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null)
+  if compgen -G "$ARCHIVES_DIR/*.tar.gz" >/dev/null; then
+    for f in $(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null); do
+      printf "%-8s %-12s %s\n" "ARCHIVE" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
+    done
   fi
 }
 
@@ -52,51 +59,70 @@ run_backup() {
   mkdir -p "$DUMPS_DIR" "$ARCHIVES_DIR"
 
   parse_endpoint "$RDS_ENDPOINT"
-  local today dump_file
+  local today dump_file day_num
   today="$(date +%F)"
   dump_file="$DUMPS_DIR/${today}.sql.gz"
+  day_num="$(date +%d)"
 
-  log "🔄 Starting DB backup (host=$DB_HOST port=$DB_PORT db=$DB_NAME table=scores)..."
-  if ! mysqldump -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" scores | gzip > "$dump_file"; then
-    log "❌ Backup failed"; exit 1
+  log "🔄 Starting DB backup (host=$DB_HOST port=$DB_PORT db=$DB_NAME table=$TABLE_NAME)..."
+
+  if ! mysql --ssl-mode=REQUIRED -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
+      -e "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='${TABLE_NAME}'" -N >/dev/null 2>&1; then
+    log "ℹ Table '${TABLE_NAME}' not found in DB '${DB_NAME}'. Skipping backup."
+    return 0
+  fi
+
+  if ! mysqldump --ssl-mode=REQUIRED --single-transaction --set-gtid-purged=OFF --skip-lock-tables \
+      -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" "$TABLE_NAME" \
+      | gzip > "$dump_file"; then
+    log "❌ Backup failed"
+    return 1
   fi
   log "✅ Dump saved: $dump_file"
 
-  # Every 3rd day → archive the entire dumps directory snapshot
-  local daynum archive_file
-  daynum="$(date +%d)"
-  if (( daynum % 3 == 0 )); then
+  local do_archive=""
+  if (( day_num % 3 == 0 )) || [[ "${FORCE_ARCHIVE:-0}" = "1" ]]; then
+    do_archive="1"
+  fi
+
+  if [[ -n "$do_archive" ]]; then
+    local archive_file cnt
     archive_file="$ARCHIVES_DIR/${today}_backup.tar.gz"
-    ( cd "$DUMPS_DIR" && tar -czf "$archive_file" . )
+    tar -czf "$archive_file" -C "$DUMPS_DIR" "${today}.sql.gz"
     log "📦 Archive created: $archive_file"
 
-    # Keep max 3 archives (newest 3)
-    local cnt
     cnt=$(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null | wc -l || true)
     if (( cnt > 3 )); then
-      # remove older than 3
       ls -1t "$ARCHIVES_DIR"/*.tar.gz | tail -n +4 | while read -r old; do
         log "🗑 Removing old archive: $old"
         rm -f -- "$old"
       done
     fi
 
-    # Optional S3 upload
     if command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1; then
-      if aws s3 cp "$archive_file" "s3://$S3_BUCKET/"; then
+      if aws s3 cp "$archive_file" "s3://$S3_BUCKET/" --sse AES256; then
         log "☁ Uploaded to S3: s3://$S3_BUCKET/$(basename "$archive_file")"
       else
-        log "⚠ S3 upload failed; continuing locally."
+        log "⚠ S3 upload failed; continuing."
       fi
     else
       log "⚠ No AWS credentials; skipping S3 upload."
     fi
+  else
+    log "⏩ Not an archive day; skipping S3 upload."
   fi
 }
 
 case "${1:---run}" in
   --help|-h) usage ;;
   --list|-l) list_backups ;;
-  --run|-r|"") run_backup ;;
-  *) usage; exit 1 ;;
+  --run|-r|"")
+    run_backup
+    ;;
+  --archive-now)
+    FORCE_ARCHIVE=1 run_backup
+    ;;
+  *)
+    usage; exit 1 ;;
 esac
+
