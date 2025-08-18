@@ -1,15 +1,18 @@
 [Unit]
 Description=Backup the 'score' table to S3
-After=network.target
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsExecutable=/opt/scripts/backup-script.sh
 
 [Service]
 Type=oneshot
 User=serpentbackup
 Group=serpentbackup
-ExecStart=/opt/scripts/backup-script.sh
+EnvironmentFile=-/etc/dbbackup.env
+ExecStart=/opt/scripts/backup-script.sh --run
+WorkingDirectory=/var/backups/score
 StandardOutput=append:/var/log/score-backup.log
 StandardError=append:/var/log/score-backup.log
 
 [Install]
 WantedBy=multi-user.target
-
