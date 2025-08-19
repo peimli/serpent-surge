@@ -1,10 +1,11 @@
 [Unit]
-Description=Run score backup every day
+Description=Run score backup every day at 02:00
 
 [Timer]
-OnCalendar=daily
+OnCalendar=*-*-* 02:00
 Persistent=true
 Unit=backup-score.service
 
 [Install]
 WantedBy=timers.target
+

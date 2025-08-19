@@ -6,12 +6,12 @@ resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "serpent-vpc" }
+  tags                 = { Name = "serpent-vpc" }
 }
 
 resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
-  tags = { Name = "serpent-gw" }
+  tags   = { Name = "serpent-gw" }
 }
 
 resource "aws_subnet" "public_1" {
@@ -19,7 +19,7 @@ resource "aws_subnet" "public_1" {
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "${var.aws_region}a"
   map_public_ip_on_launch = true
-  tags = { Name = "subnet-a" }
+  tags                    = { Name = "subnet-a" }
 }
 
 resource "aws_subnet" "public_2" {
@@ -27,7 +27,7 @@ resource "aws_subnet" "public_2" {
   cidr_block              = "10.0.2.0/24"
   availability_zone       = "${var.aws_region}b"
   map_public_ip_on_launch = true
-  tags = { Name = "subnet-b" }
+  tags                    = { Name = "subnet-b" }
 }
 
 resource "aws_route_table" "public" {

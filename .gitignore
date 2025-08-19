@@ -1,5 +1,5 @@
 # Terraform junk
-terraform/.terraform/providers/registry.terraform.io/hashicorp/*
+terraform/.terraform
 terraform/*.tfstate
 terraform/*.tfstate.backup
 terraform/*.tfvars

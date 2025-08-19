@@ -32,9 +32,15 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-# Optional if you want to customize bucket name
 variable "s3_bucket_prefix" {
   description = "Prefix for S3 bucket name"
   type        = string
   default     = "serpent-surge-backups"
 }
+
+variable "project" {
+  type        = string
+  description = "Project name used in tags and resource names"
+  default     = "serpent-surge"
+}
+

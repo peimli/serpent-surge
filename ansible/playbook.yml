@@ -3,11 +3,11 @@
   become: true
 
   vars:
-    db_user: "{{ db_user | default('admin') }}"
-    db_password: "{{ db_password | default('adminpassword') }}"
-    db_name: "{{ db_name | default('serpent_surge_db') }}"
-    rds_endpoint: "{{ rds_endpoint | default('localhost') }}"
-    s3_bucket_name: "{{ s3_bucket_name | default('serpent-surge-backups') }}"
+    db_user: "{{ db_user }}"
+    db_password: "{{ db_password }}"
+    db_name: "{{ db_name }}"
+    rds_endpoint: "{{ rds_endpoint }}"
+    s3_bucket_name: "{{ s3_bucket_name }}"
 
   tasks:
     - name: Remove conflicting Docker packages
