@@ -2,13 +2,12 @@
 set -euo pipefail
 umask 027
 
-{% set _ep     = rds_endpoint.value if rds_endpoint is mapping else rds_endpoint %}
-{% set _user   = db_user.value       if db_user       is mapping else db_user %}
-{% set _pass   = db_password.value   if db_password   is mapping else db_password %}
-{% set _name   = db_name.value       if db_name       is mapping else db_name %}
-{% set _bucket = s3_bucket_name.value if s3_bucket_name is mapping else s3_bucket_name %}
-{% set _table  = table_name.value if (table_name is defined and table_name is mapping)
-                else (table_name if table_name is defined else 'scores') %}
+{% set _ep     = rds_endpoint.value }
+{% set _user   = db_user.value }
+{% set _pass   = db_password.value }
+{% set _name   = db_name.value }
+{% set _bucket = s3_bucket_name.value }
+{% set _table  = table_name.value }
 
 BACKUP_BASE="/var/backups/score"
 DUMPS_DIR="$BACKUP_BASE/dumps"
