@@ -9,6 +9,7 @@ Type=oneshot
 User=serpentbackup
 Group=serpentbackup
 EnvironmentFile=-/etc/dbbackup.env
+EnvironmentFile=-/etc/aws-dbbackup.env   
 ExecStart=/opt/scripts/backup-script.sh --run
 WorkingDirectory=/var/backups/score
 StandardOutput=append:/var/log/score-backup.log
@@ -16,3 +17,4 @@ StandardError=append:/var/log/score-backup.log
 
 [Install]
 WantedBy=multi-user.target
+

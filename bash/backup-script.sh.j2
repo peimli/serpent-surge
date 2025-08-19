@@ -1,12 +1,26 @@
 #!/bin/bash
 set -euo pipefail
+umask 027
 
-{% set _ep    = rds_endpoint.value if rds_endpoint is mapping else rds_endpoint %}
-{% set _user  = db_user.value       if db_user       is mapping else db_user %}
-{% set _pass  = db_password.value   if db_password   is mapping else db_password %}
-{% set _name  = db_name.value       if db_name       is mapping else db_name %}
-{% set _bucket= s3_bucket_name.value      %}
-{% set _table = table_name.value if table_name is defined else 'scores' %}
+{% set _ep     = rds_endpoint.value if rds_endpoint is mapping else rds_endpoint %}
+{% set _user   = db_user.value       if db_user       is mapping else db_user %}
+{% set _pass   = db_password.value   if db_password   is mapping else db_password %}
+{% set _name   = db_name.value       if db_name       is mapping else db_name %}
+{% set _bucket = s3_bucket_name.value if s3_bucket_name is mapping else s3_bucket_name %}
+{% set _table  = table_name.value if (table_name is defined and table_name is mapping)
+                else (table_name if table_name is defined else 'scores') %}
+
+BACKUP_BASE="/var/backups/score"
+DUMPS_DIR="$BACKUP_BASE/dumps"
+ARCHIVES_DIR="$BACKUP_BASE/archives"
+
+DB_USER="{{ _user }}"
+DB_PASS="{{ _pass }}"
+DB_NAME="{{ _name }}"
+RDS_ENDPOINT="{{ _ep }}"
+TABLE_NAME="{{ _table }}"
+S3_BUCKET="{{ _bucket }}"
+S3_PREFIX="${S3_PREFIX:-backups/}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
@@ -23,118 +37,106 @@ parse_endpoint() {
 usage() {
   cat <<EOF
 Usage: $0 [--run] [--archive-now] [--list] [--help]
-  --run           Napi dump; ha >=3 nap telt el az utolsó archív óta, akkor archivál is
-  --archive-now   Azonnali dump + archív (kényszerített)
-  --list          Archívumok listázása
+  --run           Napi dump; MINDIG. Minden 3. napon archív + S3 (vagy FORCE_ARCHIVE=1)
+  --archive-now   Azonnali dump + archív + S3 (teszt)
+  --list          Mentések listázása
   --help          Súgó
 EOF
 }
 
 list_backups() {
-  printf "%-40s  %-10s %-5s %-10s\n" "NAME" "DATE" "TIME" "SIZE(KB)"
-  for f in $(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null || true); do
-    printf "%-40s  %-10s %-5s %-10s\n" \
-      "$(basename "$f")" \
-      "$(date -r "$f" '+%Y-%m-%d')" \
-      "$(date -r "$f" '+%H:%M')" \
-      "$(du -k "$f" | cut -f1)"
+  printf "%-8s %-12s %s\n" "TYPE" "DATE" "SIZE(KB)"
+  if compgen -G "$DUMPS_DIR/*.sql.gz" >/dev/null; then
+    for f in $(ls -1t "$DUMPS_DIR"/*.sql.gz 2>/dev/null); do
+      printf "%-8s %-12s %s\n" "DUMP" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
+    done
+  fi
+  if compgen -G "$ARCHIVES_DIR/*.tar.gz" >/dev/null; then
+    for f in $(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null); do
+      printf "%-8s %-12s %s\n" "ARCHIVE" "$(date -r "$f" '+%Y-%m-%d')" "$(du -k "$f" | cut -f1)"
+    done
+  fi
+}
+
+s3_rotate() {
+  [[ -z "${S3_BUCKET:-}" ]] && return 0
+  local keys
+  if ! keys=$(aws s3api list-objects-v2 \
+      --bucket "$S3_BUCKET" \
+      --prefix "$S3_PREFIX" \
+      --query 'sort_by(Contents, &LastModified)[:-3][].Key' \
+      --output text 2>/dev/null); then
+    log "S3 list-objects failed, skip rotation."
+    return 0
+  fi
+  [[ -z "$keys" ]] && return 0
+  for key in $keys; do
+    aws s3 rm "s3://$S3_BUCKET/$key" && log "🗑 Old S3 archive deleted: $key"
   done
 }
 
-# >=3 nap telt el az utolsó archiválás óta?
-should_archive() {
-  # kényszerített futásnál nem nézünk időt
-  if [[ "${FORCE_ARCHIVE:-0}" = "1" ]]; then
-    return 0
-  fi
+run_backup() {
+  mkdir -p "$DUMPS_DIR" "$ARCHIVES_DIR"
 
-  # ha még sosem archiváltunk, akkor csak "időzítsük" a következőket:
-  if [[ ! -f "$LAST_ARCHIVE_FILE" ]]; then
-    # első futáskor feljegyezzük a kezdő időt és MÉG NEM archiválunk
-    date +%s > "$LAST_ARCHIVE_FILE"
-    return 1
-  fi
-
-  local now last delta
-  now=$(date +%s)
-  last=$(cat "$LAST_ARCHIVE_FILE" || echo 0)
-  delta=$(( now - last ))
-  # 3 nap = 259200 s
-  (( delta >= 259200 ))
-}
-
-dump_once() {
   parse_endpoint "$RDS_ENDPOINT"
-  mkdir -p "$DUMPS_DIR"
+  local today dump_file day_num
+  today="$(date +%F)"
+  dump_file="$DUMPS_DIR/${today}.sql.gz"
+  day_num="$(date +%d)"
 
-  local ts dump_file
-  ts="$(date '+%Y-%m-%d_%H-%M')"
-  dump_file="$DUMPS_DIR/${ts}.sql.gz"
-
-  log " DB dump indul (host=$DB_HOST port=$DB_PORT db=$DB_NAME table=$TABLE_NAME)..."
+  log "Starting DB backup (host=$DB_HOST port=$DB_PORT db=$DB_NAME table=$TABLE_NAME)..."
 
   if ! mysql --ssl-mode=REQUIRED -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" \
-      -e "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='${TABLE_NAME}'" -N >/dev/null 2>&1; then
-    log "ℹ Tábla '${TABLE_NAME}' nem található a(z) '${DB_NAME}' adatbázisban, kihagyom a dumpot."
+      -e "SELECT 1 FROM information_schema.tables WHERE table_schema='${DB_NAME}' AND table_name='${TABLE_NAME}'" -N >/dev/null 2>&1
+  then
+    log "ℹ Table '${TABLE_NAME}' not found in DB '${DB_NAME}'. Skipping backup."
     return 0
   fi
 
-  mysqldump --ssl-mode=REQUIRED --single-transaction --set-gtid-purged=OFF --skip-lock-tables \
+  # Napi dump – minden nap készül
+  if ! mysqldump --ssl-mode=REQUIRED --single-transaction --set-gtid-purged=OFF --skip-lock-tables \
       -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" "$TABLE_NAME" \
       | gzip > "$dump_file"
-  log "Dump kész: $dump_file"
-}
+  then
+    log "Backup failed"
+    return 1
+  fi
+  log "Dump saved: $dump_file"
 
-archive_now() {
-  mkdir -p "$ARCHIVES_DIR"
-
-  # van-e mit archiválni?
-  if ! compgen -G "$DUMPS_DIR/*.sql.gz" >/dev/null; then
-    log "ℹ Nincs mit archiválni a $DUMPS_DIR alatt."
-    return 0
+  # Archív + S3 – minden 3. napon vagy FORCE_ARCHIVE=1 esetén
+  local do_archive=""
+  if (( day_num % 3 == 0 )) || [[ "${FORCE_ARCHIVE:-0}" = "1" ]]; then
+    do_archive="1"
   fi
 
-  local ts archive_file
-  ts="$(date '+%Y-%m-%d_%H-%M')"
-  archive_file="$ARCHIVES_DIR/${ts}_backup.tar.gz"
+  if [[ -n "$do_archive" ]]; then
+    local archive_file cnt
+    archive_file="$ARCHIVES_DIR/${today}_backup.tar.gz"
+    tar -czf "$archive_file" -C "$DUMPS_DIR" "${today}.sql.gz"
+    log "Archive created: $archive_file"
 
-  log "Archív készítése: $archive_file"
-  tar -czf "$archive_file" -C "$DUMPS_DIR" ./*.sql.gz
-  log "Archív létrehozva: $archive_file"
-
-  # rotáció: csak 3 maradjon
-  local cnt
-  cnt=$(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null | wc -l || true)
-  if (( cnt > 3 )); then
-    ls -1t "$ARCHIVES_DIR"/*.tar.gz | tail -n +4 | while read -r old; do
-      log " Régi archívum törlése: $old"
-      rm -f -- "$old"
-    done
-  fi
-
-  # opcionális S3 feltöltés (ha van hitelesítés)
-  if command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1; then
-    if aws s3 cp "$archive_file" "s3://$S3_BUCKET/" --sse AES256; then
-      log "☁ Feltöltve: s3://$S3_BUCKET/$(basename "$archive_file")"
-    else
-      log "⚠ S3 feltöltés sikertelen; folytatom lokálisan."
+    # Lokális retenció: max 3 archív
+    cnt=$(ls -1t "$ARCHIVES_DIR"/*.tar.gz 2>/dev/null | wc -l || true)
+    if (( cnt > 3 )); then
+      ls -1t "$ARCHIVES_DIR"/*.tar.gz | tail -n +4 | while read -r old; do
+        log "Removing old archive: $old"
+        rm -f -- "$old"
+      done
     fi
-  fi
 
-  # sikeres archív után dumpok törlése
-  log " Dumpok törlése: $DUMPS_DIR/*.sql.gz"
-  rm -f "$DUMPS_DIR"/*.sql.gz || true
-
-  # utolsó archív idejének frissítése
-  date +%s > "$LAST_ARCHIVE_FILE"
-}
-
-run_backup() {
-  dump_once
-  if should_archive; then
-    archive_now
+    # Feltöltés S3-ba
+    if command -v aws >/dev/null 2>&1 && aws sts get-caller-identity >/dev/null 2>&1; then
+      if aws s3 cp "$archive_file" "s3://$S3_BUCKET/$S3_PREFIX" --sse AES256; then
+        log "Uploaded to S3: s3://$S3_BUCKET/$S3_PREFIX$(basename "$archive_file")"
+        s3_rotate
+      else
+        log "S3 upload failed; continuing."
+      fi
+    else
+      log "No AWS credentials; skipping S3 upload."
+    fi
   else
-    log " Még nem telt el 3 nap az utolsó archív óta – csak dump készült."
+    log "Not an archive day; skipping S3 upload."
   fi
 }
 
@@ -145,4 +147,3 @@ case "${1:---run}" in
   --archive-now) FORCE_ARCHIVE=1 run_backup ;;
   *) usage; exit 1 ;;
 esac
-
