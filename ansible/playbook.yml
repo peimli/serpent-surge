@@ -3,11 +3,14 @@
   become: true
 
   vars:
+    letsencrypt_email: "zoltanpeimli23@gmail.com"
+    domain_name: "serpent.peimliz.pp.ua"
     db_user: "{{ db_user }}"
     db_password: "{{ db_password }}"
     db_name: "{{ db_name }}"
     rds_endpoint: "{{ rds_endpoint }}"
     s3_bucket_name: "{{ s3_bucket_name }}"
+    table_name: "{{ table_name }}"
 
   tasks:
     - name: Remove conflicting Docker packages
@@ -83,21 +86,70 @@
         src: ../docker/frontend/
         dest: /home/ubuntu/frontend/
         mode: '0755'
-
+   
     - name: Copy nginx config
-      copy:
-        src: nginx.conf
+      template:
+        src: nginx.conf.j2
         dest: /home/ubuntu/nginx.conf
         mode: '0644'
 
+    - name: Copy nginx SSL config
+      template:
+        src: nginx-ssl.conf.j2
+        dest: /home/ubuntu/nginx-ssl.conf
+        mode: '0644'
+    
     - name: Stop and remove old containers
       shell: |
         docker stop $(docker ps -aq) || true
         docker rm $(docker ps -aq) || true
         docker volume prune -f
 
+    - name: Ensure letsencrypt Docker volume exists
+      command: docker volume create letsencrypt
+      register: le_vol
+      changed_when: "'already exists' not in le_vol.stdout"
+
+    - name: Check if certificate already exists in letsencrypt volume
+      shell: >
+        docker run --rm -v letsencrypt:/etc/letsencrypt
+        busybox sh -c
+        'test -f /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem'
+      register: cert_present
+      changed_when: false
+      failed_when: false
+
+    - name: Obtain initial Let’s Encrypt certificate (one-time, standalone)
+      shell: |
+        docker run --rm \
+          -p 80:80 \
+          -v letsencrypt:/etc/letsencrypt \
+          certbot/certbot certonly --standalone \
+          -d {{ domain_name }} \
+          --agree-tos -m {{ letsencrypt_email }} \
+          --non-interactive --keep-until-expiring
+      when: cert_present.rc != 0
+
+    - name: Switch to SSL nginx config atomically
+      copy:
+        src: /home/ubuntu/nginx-ssl.conf
+        dest: /home/ubuntu/nginx.conf
+        remote_src: true
+        mode: '0644'
+
+
     - name: Start containers
       shell: docker-compose -f /home/ubuntu/docker-compose.yml up -d --build --remove-orphans
+      args:
+        chdir: /home/ubuntu/
+
+    - name: Test Nginx config inside container
+      shell: docker-compose -f /home/ubuntu/docker-compose.yml exec -T frontend nginx -t
+      args:
+        chdir: /home/ubuntu/
+
+    - name: Reload Nginx to pick up certificates
+      shell: docker-compose -f /home/ubuntu/docker-compose.yml exec -T frontend nginx -s reload
       args:
         chdir: /home/ubuntu/
 
