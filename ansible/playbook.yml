@@ -4,7 +4,7 @@
 
   vars:
     letsencrypt_email: "zoltanpeimli23@gmail.com"
-    domain_name: "serpent.peimliz.pp.ua"
+    domain_name: "serpent.surge.peimliz.pp.ua"
     db_user: "{{ db_user }}"
     db_password: "{{ db_password }}"
     db_name: "{{ db_name }}"
@@ -87,23 +87,16 @@
         dest: /home/ubuntu/frontend/
         mode: '0755'
    
-    - name: Copy nginx config (HTTP only, bootstrap)
-      template:
-        src: nginx.conf.j2
-        dest: /home/ubuntu/nginx.conf
-        mode: '0644'
-
     - name: Copy nginx SSL config
       template:
         src: nginx-ssl.conf.j2
-        dest: /home/ubuntu/nginx-ssl.conf
+        dest: /home/ubuntu/nginx.conf
         mode: '0644'
     
     - name: Stop and remove old containers
       shell: |
         docker stop $(docker ps -aq) || true
         docker rm $(docker ps -aq) || true
-        docker volume prune -f
 
     - name: Ensure letsencrypt Docker volume exists
       command: docker volume create letsencrypt
@@ -139,9 +132,9 @@
       delay: 4
       until: have_cert.rc == 0
 
-    - name: Switch to SSL nginx config atomically
+    - name: Start nginx SSL config
       copy:
-        src: /home/ubuntu/nginx-ssl.conf
+        src: /home/ubuntu/nginx.conf
         dest: /home/ubuntu/nginx.conf
         remote_src: true
         mode: '0644'
