@@ -11,8 +11,7 @@ server {
 }
 
 server {
-  listen 443 ssl;
-  http2 on;
+  listen 443 ssl http2;
   server_name {{ domain_name }};
 
   ssl_certificate     /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem;
@@ -40,3 +39,4 @@ server {
   location /top-scores { proxy_pass http://backend:3000/top-scores; }
   location /save-score { proxy_pass http://backend:3000/save-score; }
 }
+

@@ -35,4 +35,3 @@ output "db_name" {
 output "table_name" {
   value = var.table_name
 }
-
