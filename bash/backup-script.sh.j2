@@ -2,12 +2,12 @@
 set -euo pipefail
 umask 027
 
-{% set _ep     = rds_endpoint.value }
-{% set _user   = db_user.value }
-{% set _pass   = db_password.value }
-{% set _name   = db_name.value }
-{% set _bucket = s3_bucket_name.value }
-{% set _table  = table_name.value }
+{% set _ep     = rds_endpoint.value %}
+{% set _user   = db_user.value %}
+{% set _pass   = db_password.value %}
+{% set _name   = db_name.value %}
+{% set _bucket = s3_bucket_name.value %}
+{% set _table  = table_name.value %}
 
 BACKUP_BASE="/var/backups/score"
 DUMPS_DIR="$BACKUP_BASE/dumps"

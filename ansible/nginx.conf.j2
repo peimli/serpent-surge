@@ -1,6 +1,7 @@
 server {
     listen 80;
-
+    server_name {{ domain_name }};
+    
     location / {
         root /usr/share/nginx/html;
         index index.html;
@@ -14,7 +15,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
-    # Optional: shortcut for top-scores without /api/
     location /top-scores {
         proxy_pass http://backend:3000/top-scores;
     }

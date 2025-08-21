@@ -25,6 +25,12 @@ variable "db_name" {
   default     = "serpent_surge_db"
 }
 
+variable "table_name" {
+  description = "The table inside the database to back up"
+  type        = string
+  default     = "score"
+}
+
 # AWS region
 variable "aws_region" {
   description = "AWS region to deploy resources"
